@@ -111,8 +111,8 @@ public class CollectVariantCallingMetrics extends CommandLineProgram {
                             CallingMetricAccumulator accumulator = GVCF_INPUT ? new GvcfMetricAccumulator(dbsnp) : new CallingMetricAccumulator(dbsnp);
                             accumulator.setup(vcfHeader);
                             return accumulator;
-                        })
-                        .combiningResultsBy(CallingMetricAccumulator.Result::merge)
+                        });
+                        builder.combiningResultsBy(CallingMetricAccumulator.Result::merge)
                         .withInput(INPUT)
                         .multithreadingBy(THREAD_COUNT);
 
