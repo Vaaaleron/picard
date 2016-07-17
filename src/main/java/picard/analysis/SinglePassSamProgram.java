@@ -45,9 +45,13 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 
 /**
  * Super class that is designed to provide some consistent structure between
@@ -132,6 +136,73 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         final ProgressLogger progress = new ProgressLogger(log);
         
         ExecutorService service = Executors.newCachedThreadPool();
+
+        final int processors = Runtime.getRuntime().availableProcessors();
+        final int threads = processors > 2 ? processors / 2 :  2;
+        Semaphore sem = new Semaphore(threads);
+        
+        final int QUEUE_CAPACITY = 10;
+        
+        
+        class Worker implements Runnable {
+
+        	final List<Object[]> poisonPill = Collections.emptyList();
+        	
+        	BlockingQueue<List<Object[]>> queue = new LinkedBlockingQueue<List<Object[]>>(QUEUE_CAPACITY);
+        	
+        	@Override
+        	public void run() {
+        		while (true) {
+					try {
+						List<Object[]> tmpPairs = queue.take();
+						if (tmpPairs.isEmpty()) {
+							return;
+						}
+						sem.acquire();
+						service.submit(new Runnable() {
+							
+							@Override
+							public void run() {
+								for (Object[] objects : tmpPairs) {
+									SAMRecord rec = (SAMRecord) objects[0];
+									ReferenceSequence ref = (ReferenceSequence) objects[1];
+									
+									for (final SinglePassSamProgram program : programs) {
+										program.acceptRead(rec, ref);
+									}
+									
+									progress.record(rec);
+								}
+								
+								sem.release();
+							}
+						});
+						
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
+        	}
+        	
+        	public void submitData(List<Object[]> data) {
+        		try {
+					queue.put(data);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+        	}
+        	
+        	public void stop() {
+        		try {
+					queue.put(poisonPill);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+        	}
+        }
+        
+        Worker worker = new Worker();
+        service.execute(worker);
         
         final int MAX_PAIRS = 1000;
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
@@ -149,26 +220,9 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				continue;
 			}
             
-            final List<Object[]> tmpPairs = pairs;
-            pairs = new ArrayList<>(MAX_PAIRS);
+            worker.submitData(pairs);
             
-            service.submit(new Runnable() {
-				
-				@Override
-				public void run() {
-					for (Object[] objects : tmpPairs) {
-						SAMRecord rec = (SAMRecord) objects[0];
-						ReferenceSequence ref = (ReferenceSequence) objects[1];
-						
-						for (final SinglePassSamProgram program : programs) {
-							program.acceptRead(rec, ref);
-						}
-						progress.record(rec);
-					}
-				}
-			});
-
-
+            pairs = new ArrayList<>(MAX_PAIRS);
 
             // See if we need to terminate early?
             if (stopAfter > 0 && progress.getCount() >= stopAfter) {
@@ -182,6 +236,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         }
         
         service.shutdown();
+        worker.stop();
 
         CloserUtil.close(in);
 
