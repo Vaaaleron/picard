@@ -204,7 +204,12 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         Worker worker = new Worker();
         service.execute(worker);
         
-        final int MAX_PAIRS = 1000;
+        int MAX_PAIRS = 1000;
+        
+        if (MAX_PAIRS > stopAfter) {
+			MAX_PAIRS = (int) stopAfter;
+		}
+        
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
 
         for (final SAMRecord rec : in) {
@@ -222,17 +227,25 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
             
             worker.submitData(pairs);
             
-            pairs = new ArrayList<>(MAX_PAIRS);
-
             // See if we need to terminate early?
             if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-                break;
+            	break;
             }
-
+            
             // And see if we're into the unmapped reads at the end
             if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                break;
+            	break;
             }
+            
+            if (stopAfter > 0) {
+    			long left = stopAfter - progress.getCount();
+    			if (MAX_PAIRS > left) {
+    				MAX_PAIRS = (int) left;
+    			}
+    		}
+            
+            pairs = new ArrayList<>(MAX_PAIRS);
+
         }
         
         service.shutdown();
