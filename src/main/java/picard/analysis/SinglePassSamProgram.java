@@ -47,6 +47,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -137,7 +138,8 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		ExecutorService service = Executors.newCachedThreadPool();
 
 		final int processors = Runtime.getRuntime().availableProcessors();
-		final int threads = processors > 2 ? processors / 2 : 2;
+//		final int threads = processors > 2 ? processors / 2 : 2;
+		final int threads = processors / 2;
 		Semaphore sem = new Semaphore(threads);
 
 		final int QUEUE_CAPACITY = 10;
@@ -328,8 +330,6 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				worker.submitData(pairs);
 
 				progress.record(rec);
-
-
 
 				// See if we need to terminate early?
 				if (stopAfter > 0 && progress.getCount() >= stopAfter) {
