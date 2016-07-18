@@ -46,12 +46,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Super class that is designed to provide some consistent structure between
@@ -87,72 +89,70 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		return 0;
 	}
 
-	public static void makeItSo(final File input,
-                                final File referenceSequence,
-                                final boolean assumeSorted,
-                                final long stopAfter,
-                                final Collection<SinglePassSamProgram> programs) {
+	public static void makeItSo(final File input, final File referenceSequence, final boolean assumeSorted,
+			final long stopAfter, final Collection<SinglePassSamProgram> programs) {
 
-        // Setup the standard inputs
-        IOUtil.assertFileIsReadable(input);
-        final SamReader in = SamReaderFactory.makeDefault().referenceSequence(referenceSequence).open(input);
+		// Setup the standard inputs
+		IOUtil.assertFileIsReadable(input);
+		final SamReader in = SamReaderFactory.makeDefault().referenceSequence(referenceSequence).open(input);
 
-        // Optionally load up the reference sequence and double check sequence dictionaries
-        final ReferenceSequenceFileWalker walker;
-        if (referenceSequence == null) {
-            walker = null;
-        } else {
-            IOUtil.assertFileIsReadable(referenceSequence);
-            walker = new ReferenceSequenceFileWalker(referenceSequence);
+		// Optionally load up the reference sequence and double check sequence
+		// dictionaries
+		final ReferenceSequenceFileWalker walker;
+		if (referenceSequence == null) {
+			walker = null;
+		} else {
+			IOUtil.assertFileIsReadable(referenceSequence);
+			walker = new ReferenceSequenceFileWalker(referenceSequence);
 
-            if (!in.getFileHeader().getSequenceDictionary().isEmpty()) {
-                SequenceUtil.assertSequenceDictionariesEqual(in.getFileHeader().getSequenceDictionary(),
-                        walker.getSequenceDictionary());
-            }
-        }
+			if (!in.getFileHeader().getSequenceDictionary().isEmpty()) {
+				SequenceUtil.assertSequenceDictionariesEqual(in.getFileHeader().getSequenceDictionary(),
+						walker.getSequenceDictionary());
+			}
+		}
 
-        // Check on the sort order of the BAM file
-        {
-            final SortOrder sort = in.getFileHeader().getSortOrder();
-            if (sort != SortOrder.coordinate) {
-                if (assumeSorted) {
-                    log.warn("File reports sort order '" + sort + "', assuming it's coordinate sorted anyway.");
-                } else {
-                    throw new PicardException("File " + input.getAbsolutePath() + " should be coordinate sorted but " +
-                            "the header says the sort order is " + sort + ". If you believe the file " +
-                            "to be coordinate sorted you may pass ASSUME_SORTED=true");
-                }
-            }
-        }
+		// Check on the sort order of the BAM file
+		{
+			final SortOrder sort = in.getFileHeader().getSortOrder();
+			if (sort != SortOrder.coordinate) {
+				if (assumeSorted) {
+					log.warn("File reports sort order '" + sort + "', assuming it's coordinate sorted anyway.");
+				} else {
+					throw new PicardException("File " + input.getAbsolutePath() + " should be coordinate sorted but "
+							+ "the header says the sort order is " + sort + ". If you believe the file "
+							+ "to be coordinate sorted you may pass ASSUME_SORTED=true");
+				}
+			}
+		}
 
-        // Call the abstract setup method!
-        boolean anyUseNoRefReads = false;
-        for (final SinglePassSamProgram program : programs) {
-            program.setup(in.getFileHeader(), input);
-            anyUseNoRefReads = anyUseNoRefReads || program.usesNoRefReads();
-        }
+		// Call the abstract setup method!
+		boolean anyUseNoRefReads = false;
+		for (final SinglePassSamProgram program : programs) {
+			program.setup(in.getFileHeader(), input);
+			anyUseNoRefReads = anyUseNoRefReads || program.usesNoRefReads();
+		}
 
+		final ProgressLogger progress = new ProgressLogger(log);
 
-        final ProgressLogger progress = new ProgressLogger(log);
-        
-        ExecutorService service = Executors.newCachedThreadPool();
+		ExecutorService service = Executors.newCachedThreadPool();
 
-        final int processors = Runtime.getRuntime().availableProcessors();
-        final int threads = processors > 2 ? processors / 2 :  2;
-        Semaphore sem = new Semaphore(threads);
-        
-        final int QUEUE_CAPACITY = 10;
-        
-        
-        class Worker implements Runnable {
+		final int processors = Runtime.getRuntime().availableProcessors();
+		final int threads = processors > 2 ? processors / 2 : 2;
+		Semaphore sem = new Semaphore(threads);
 
-        	final List<Object[]> poisonPill = Collections.emptyList();
-        	
-        	BlockingQueue<List<Object[]>> queue = new LinkedBlockingQueue<List<Object[]>>(QUEUE_CAPACITY);
-        	
-        	@Override
-        	public void run() {
-        		while (true) {
+		final int QUEUE_CAPACITY = 10;
+
+		class Worker implements Runnable {
+
+			final List<Object[]> poisonPill = Collections.emptyList();
+
+			BlockingQueue<List<Object[]>> queue = new LinkedBlockingQueue<List<Object[]>>(QUEUE_CAPACITY);
+
+			AtomicBoolean working = new AtomicBoolean(false);
+
+			@Override
+			public void run() {
+				while (true) {
 					try {
 						List<Object[]> tmpPairs = queue.take();
 						if (tmpPairs.isEmpty()) {
@@ -160,90 +160,202 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 						}
 						sem.acquire();
 						service.submit(new Runnable() {
-							
+
 							@Override
 							public void run() {
+								working.set(true);
 								for (Object[] objects : tmpPairs) {
 									SAMRecord rec = (SAMRecord) objects[0];
 									ReferenceSequence ref = (ReferenceSequence) objects[1];
-									
+
 									for (final SinglePassSamProgram program : programs) {
 										program.acceptRead(rec, ref);
 									}
-									
-									progress.record(rec);
+
 								}
-								
+
+								working.set(false);
 								sem.release();
 							}
 						});
-						
+
 					} catch (InterruptedException e) {
 						e.printStackTrace();
 					}
 				}
-        	}
-        	
-        	public void submitData(List<Object[]> data) {
-        		try {
+			}
+
+			public void submitData(List<Object[]> data) {
+				try {
 					queue.put(data);
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
-        	}
-        	
-        	public void stop() {
-        		try {
+			}
+
+			public void stop() {
+				try {
 					queue.put(poisonPill);
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
-        	}
-        }
-        
-        Worker worker = new Worker();
-        service.execute(worker);
-        
-        final int MAX_PAIRS = 1000;
-        List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
-
-        for (final SAMRecord rec : in) {
-            final ReferenceSequence ref;
-            if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                ref = null;
-            } else {
-                ref = walker.get(rec.getReferenceIndex());
-            }
-            
-            pairs.add(new Object[]{rec, ref});
-            if (pairs.size() < MAX_PAIRS) {
-				continue;
 			}
-            
-            worker.submitData(pairs);
-            
-            pairs = new ArrayList<>(MAX_PAIRS);
+		}
 
-            // See if we need to terminate early?
-            if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-                break;
-            }
+		// Starting ExecutorService
+		Worker worker = new Worker();
+		service.execute(worker);
 
-            // And see if we're into the unmapped reads at the end
-            if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                break;
-            }
-        }
-        
-        service.shutdown();
-        worker.stop();
+		Iterator<SAMRecord> it = in.iterator();
 
-        CloserUtil.close(in);
+		// finding optimal MAX_PAIRS value
+		// first test
+		SAMRecord rec = it.next();
+		ReferenceSequence ref;
 
-        for (final SinglePassSamProgram program : programs) {
-            program.finish();
-        }
-    }
+		if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+			ref = null;
+		} else {
+			ref = walker.get(rec.getReferenceIndex());
+		}
+
+		int MAX_PAIRS = 1;
+		List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
+
+		pairs.add(new Object[] { rec, ref });
+
+		long startSub = System.nanoTime();
+
+		worker.submitData(pairs);
+
+		while (!worker.working.get()) {
+		}
+		long startWrk = System.nanoTime();
+
+		while (worker.working.get()) {
+		}
+		long stopWrk = System.nanoTime();
+
+		progress.record(rec);
+
+		long submitting1 = startWrk - startSub;
+		long working1 = stopWrk - startWrk;
+
+		// finding optimal MAX_PAIRS value
+		// second test
+		if ((stopAfter > 2) && (submitting1 > working1)) {
+			MAX_PAIRS = 2;
+			pairs = new ArrayList<>(MAX_PAIRS);
+
+			while (it.hasNext() && pairs.size() < MAX_PAIRS) {
+				rec = it.next();
+
+				if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+					ref = null;
+				} else {
+					ref = walker.get(rec.getReferenceIndex());
+				}
+
+				pairs.add(new Object[] { rec, ref });
+
+				if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+					break;
+				}
+			}
+
+			startSub = System.nanoTime();
+
+			worker.submitData(pairs);
+
+			while (!worker.working.get()) {
+			}
+			startWrk = System.nanoTime();
+
+			while (worker.working.get()) {
+			}
+			stopWrk = System.nanoTime();
+
+			progress.record(rec);
+
+			long submitting2 = startWrk - startSub;
+			long working2 = stopWrk - startWrk;
+
+			long wrkOneElement = working2 - working1;
+			long subOneElement = submitting2 - submitting1;
+			long subQueue = submitting1 - subOneElement;
+			
+			if (wrkOneElement > subOneElement) {
+				MAX_PAIRS = (int) (subQueue / (wrkOneElement - subOneElement));
+			} else  {
+				MAX_PAIRS = 1000;
+			}
+			
+		}
+
+		long left;
+		if (stopAfter > 0) {
+			left = stopAfter - progress.getCount();
+			if (MAX_PAIRS > left) {
+				MAX_PAIRS = (int) left;
+			}
+		}
+
+		if (!(stopAfter > 0 && progress.getCount() >= stopAfter)) {
+
+			pairs = new ArrayList<>(MAX_PAIRS);
+
+			while (it.hasNext()) {
+
+				// see if we're into the unmapped reads at the end
+				if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+					worker.submitData(pairs);
+					break;
+				}
+
+				rec = it.next();
+
+				if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+					ref = null;
+				} else {
+					ref = walker.get(rec.getReferenceIndex());
+				}
+
+				pairs.add(new Object[] { rec, ref });
+				if (pairs.size() < MAX_PAIRS) {
+					continue;
+				}
+
+				worker.submitData(pairs);
+
+				progress.record(rec);
+
+
+
+				// See if we need to terminate early?
+				if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+					break;
+				}
+
+				if (stopAfter > 0) {
+					left = stopAfter - progress.getCount();
+					if (MAX_PAIRS > left) {
+						MAX_PAIRS = (int) left;
+					}
+				}
+
+				pairs = new ArrayList<>(MAX_PAIRS);
+			}
+		}
+
+		service.shutdown();
+		worker.stop();
+
+		CloserUtil.close(in);
+
+		for (final SinglePassSamProgram program : programs) {
+			program.finish();
+		}
+	}
 
 	/**
 	 * Can be overriden and set to false if the section of unmapped reads at the
