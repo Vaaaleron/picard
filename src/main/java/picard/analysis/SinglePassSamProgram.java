@@ -131,9 +131,9 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
         final ProgressLogger progress = new ProgressLogger(log);
         
-        ExecutorService service = Executors.newCachedThreadPool();
+        ExecutorService service = Executors.newSingleThreadExecutor();
         
-        final int MAX_PAIRS = 1000;
+        final int MAX_PAIRS = 10000;
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
 
         for (final SAMRecord rec : in) {
