@@ -137,6 +137,16 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
 
         for (final SAMRecord rec : in) {
+        	// See if we need to terminate early?
+        	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+        		break;
+        	}
+        	
+        	// And see if we're into the unmapped reads at the end
+        	if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+        		break;
+        	}
+        	
             final ReferenceSequence ref;
             if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
                 ref = null;
@@ -144,6 +154,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
                 ref = walker.get(rec.getReferenceIndex());
             }
             
+            progress.record(rec);
             pairs.add(new Object[]{rec, ref});
             if (pairs.size() < MAX_PAIRS) {
 				continue;
@@ -163,22 +174,12 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 						for (final SinglePassSamProgram program : programs) {
 							program.acceptRead(rec, ref);
 						}
-						progress.record(rec);
 					}
 				}
 			});
 
 
 
-            // See if we need to terminate early?
-            if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-                break;
-            }
-
-            // And see if we're into the unmapped reads at the end
-            if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                break;
-            }
         }
         
         service.shutdown();
