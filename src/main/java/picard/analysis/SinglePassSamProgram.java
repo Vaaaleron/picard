@@ -135,11 +135,9 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
         final ProgressLogger progress = new ProgressLogger(log);
         
-        ExecutorService service = Executors.newCachedThreadPool();
+        ExecutorService service = Executors.newFixedThreadPool(2);
 
-        final int processors = Runtime.getRuntime().availableProcessors();
-        final int threads = processors > 2 ? processors / 2 :  2;
-        Semaphore sem = new Semaphore(threads);
+        Semaphore sem = new Semaphore(1);
         
         final int QUEUE_CAPACITY = 10;
         
@@ -171,7 +169,6 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 										program.acceptRead(rec, ref);
 									}
 									
-									progress.record(rec);
 								}
 								
 								sem.release();
@@ -204,22 +201,30 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         Worker worker = new Worker();
         service.execute(worker);
         
-        int MAX_PAIRS = 1000;
+        final int MAX_PAIRS = 10000;
         
-        if (MAX_PAIRS > stopAfter) {
-			MAX_PAIRS = (int) stopAfter;
-		}
         
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
 
         for (final SAMRecord rec : in) {
-            final ReferenceSequence ref;
+        	// See if we need to terminate early?
+        	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+        		break;
+        	}
+        	
+        	// And see if we're into the unmapped reads at the end
+        	if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+        		break;
+        	}
+        
+        	final ReferenceSequence ref;
             if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
                 ref = null;
             } else {
                 ref = walker.get(rec.getReferenceIndex());
             }
             
+            progress.record(rec);
             pairs.add(new Object[]{rec, ref});
             if (pairs.size() < MAX_PAIRS) {
 				continue;
@@ -227,25 +232,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
             
             worker.submitData(pairs);
             
-            // See if we need to terminate early?
-            if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-            	break;
-            }
-            
-            // And see if we're into the unmapped reads at the end
-            if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-            	break;
-            }
-            
-            if (stopAfter > 0) {
-    			long left = stopAfter - progress.getCount();
-    			if (MAX_PAIRS > left) {
-    				MAX_PAIRS = (int) left;
-    			}
-    		}
-            
             pairs = new ArrayList<>(MAX_PAIRS);
-
         }
         
         service.shutdown();
