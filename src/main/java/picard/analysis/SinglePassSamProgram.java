@@ -135,12 +135,9 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 		final ProgressLogger progress = new ProgressLogger(log);
 
-		ExecutorService service = Executors.newCachedThreadPool();
+		ExecutorService service = Executors.newFixedThreadPool(1);
 
-		final int processors = Runtime.getRuntime().availableProcessors();
-//		final int threads = processors > 2 ? processors / 2 : 2;
-		final int threads = processors / 2;
-		Semaphore sem = new Semaphore(threads);
+		Semaphore sem = new Semaphore(6);
 
 		final int QUEUE_CAPACITY = 10;
 
@@ -258,6 +255,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 					ref = walker.get(rec.getReferenceIndex());
 				}
 
+				progress.record(rec);
 				pairs.add(new Object[] { rec, ref });
 
 				if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
@@ -277,7 +275,6 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			}
 			stopWrk = System.nanoTime();
 
-			progress.record(rec);
 
 			long submitting2 = startWrk - startSub;
 			long working2 = stopWrk - startWrk;
@@ -285,66 +282,46 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			long wrkOneElement = working2 - working1;
 			long subOneElement = submitting2 - submitting1;
 			long subQueue = submitting1 - subOneElement;
-			
+
 			if (wrkOneElement > subOneElement) {
 				MAX_PAIRS = (int) (subQueue / (wrkOneElement - subOneElement));
-			} else  {
+			} else {
 				MAX_PAIRS = 1000;
 			}
-			
+
 		}
 
-		long left;
-		if (stopAfter > 0) {
-			left = stopAfter - progress.getCount();
-			if (MAX_PAIRS > left) {
-				MAX_PAIRS = (int) left;
+		pairs = new ArrayList<>(MAX_PAIRS);
+
+		while (it.hasNext()) {
+			// See if we need to terminate early?
+			if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+				break;
 			}
-		}
 
-		if (!(stopAfter > 0 && progress.getCount() >= stopAfter)) {
+			// see if we're into the unmapped reads at the end
+			if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+				worker.submitData(pairs);
+				break;
+			}
+
+			rec = it.next();
+
+			if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+				ref = null;
+			} else {
+				ref = walker.get(rec.getReferenceIndex());
+			}
+
+			progress.record(rec);
+			pairs.add(new Object[] { rec, ref });
+			if (pairs.size() < MAX_PAIRS) {
+				continue;
+			}
+
+			worker.submitData(pairs);
 
 			pairs = new ArrayList<>(MAX_PAIRS);
-
-			while (it.hasNext()) {
-
-				// see if we're into the unmapped reads at the end
-				if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-					worker.submitData(pairs);
-					break;
-				}
-
-				rec = it.next();
-
-				if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-					ref = null;
-				} else {
-					ref = walker.get(rec.getReferenceIndex());
-				}
-
-				pairs.add(new Object[] { rec, ref });
-				if (pairs.size() < MAX_PAIRS) {
-					continue;
-				}
-
-				worker.submitData(pairs);
-
-				progress.record(rec);
-
-				// See if we need to terminate early?
-				if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-					break;
-				}
-
-				if (stopAfter > 0) {
-					left = stopAfter - progress.getCount();
-					if (MAX_PAIRS > left) {
-						MAX_PAIRS = (int) left;
-					}
-				}
-
-				pairs = new ArrayList<>(MAX_PAIRS);
-			}
 		}
 
 		service.shutdown();
