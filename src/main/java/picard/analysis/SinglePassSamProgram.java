@@ -135,9 +135,9 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 		final ProgressLogger progress = new ProgressLogger(log);
 
-		ExecutorService service = Executors.newFixedThreadPool(1);
+		ExecutorService service = Executors.newFixedThreadPool(2);
 
-		Semaphore sem = new Semaphore(6);
+		Semaphore sem = new Semaphore(1);
 
 		final int QUEUE_CAPACITY = 10;
 
@@ -286,7 +286,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			if (wrkOneElement > subOneElement) {
 				MAX_PAIRS = (int) (subQueue / (wrkOneElement - subOneElement));
 			} else {
-				MAX_PAIRS = 1000;
+				MAX_PAIRS = 10000;
 			}
 
 		}
@@ -296,10 +296,11 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		while (it.hasNext()) {
 			// See if we need to terminate early?
 			if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+				worker.submitData(pairs);
 				break;
 			}
 
-			// see if we're into the unmapped reads at the end
+			// And see if we're into the unmapped reads at the end
 			if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
 				worker.submitData(pairs);
 				break;
