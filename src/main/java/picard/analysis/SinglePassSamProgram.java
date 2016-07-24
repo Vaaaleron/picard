@@ -209,13 +209,11 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         for (final SAMRecord rec : in) {
         	// See if we need to terminate early?
         	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-        		worker.submitData(pairs);
         		break;
         	}
         	
         	// And see if we're into the unmapped reads at the end
         	if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-        		worker.submitData(pairs);
         		break;
         	}
         
@@ -236,6 +234,10 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
             
             pairs = new ArrayList<>(MAX_PAIRS);
         }
+        
+        if (pairs.size() > 0) {
+			worker.submitData(pairs);
+		}
         
         service.shutdown();
         worker.stop();
