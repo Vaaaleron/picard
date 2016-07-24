@@ -135,6 +135,25 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         
         final int MAX_PAIRS = 10000;
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
+        
+        class Worker implements Runnable {
+			
+        	List<Object[]> data = new ArrayList<>(MAX_PAIRS);
+        	
+			@Override
+			public void run() {
+				for (Object[] objects : data) {
+					SAMRecord rec = (SAMRecord) objects[0];
+					ReferenceSequence ref = (ReferenceSequence) objects[1];
+					
+					for (final SinglePassSamProgram program : programs) {
+						program.acceptRead(rec, ref);
+					}
+				}
+			}
+		};
+		
+		Worker worker = new Worker();
 
         for (final SAMRecord rec : in) {
         	// See if we need to terminate early?
@@ -160,27 +179,18 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				continue;
 			}
             
-            final List<Object[]> tmpPairs = pairs;
+            worker.data = pairs;
             pairs = new ArrayList<>(MAX_PAIRS);
             
-            service.submit(new Runnable() {
-				
-				@Override
-				public void run() {
-					for (Object[] objects : tmpPairs) {
-						SAMRecord rec = (SAMRecord) objects[0];
-						ReferenceSequence ref = (ReferenceSequence) objects[1];
-						
-						for (final SinglePassSamProgram program : programs) {
-							program.acceptRead(rec, ref);
-						}
-					}
-				}
-			});
+			service.submit(worker);
 
-
-
+			
         }
+        
+        if (pairs.size() > 0) {
+        	worker.data = pairs;
+			service.submit(worker);
+		}
         
         service.shutdown();
 
