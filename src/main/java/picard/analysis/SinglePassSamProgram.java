@@ -47,7 +47,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -153,10 +152,12 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			public void run() {
 				while (true) {
 					try {
-						List<Object[]> tmpPairs = queue.take();
+						final List<Object[]> tmpPairs = queue.take();
+						
 						if (tmpPairs.isEmpty()) {
 							return;
 						}
+						
 						sem.acquire();
 						service.submit(new Runnable() {
 
@@ -164,8 +165,8 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 							public void run() {
 								working.set(true);
 								for (Object[] objects : tmpPairs) {
-									SAMRecord rec = (SAMRecord) objects[0];
-									ReferenceSequence ref = (ReferenceSequence) objects[1];
+									final SAMRecord rec = (SAMRecord) objects[0];
+									final ReferenceSequence ref = (ReferenceSequence) objects[1];
 
 									for (final SinglePassSamProgram program : programs) {
 										program.acceptRead(rec, ref);
@@ -210,8 +211,8 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		// finding optimal MAX_PAIRS value
 		// first test
 		SAMRecord rec = it.next();
-		ReferenceSequence ref;
 
+		ReferenceSequence ref;
 		if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
 			ref = null;
 		} else {
@@ -242,7 +243,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 		// finding optimal MAX_PAIRS value
 		// second test
-		if ((stopAfter > 2) && (submitting1 > working1)) {
+		if (((stopAfter > 2) || (stopAfter == 0)) && (submitting1 > working1)) {
 			MAX_PAIRS = 2;
 			pairs = new ArrayList<>(MAX_PAIRS);
 
@@ -296,13 +297,11 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		while (it.hasNext()) {
 			// See if we need to terminate early?
 			if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-				worker.submitData(pairs);
 				break;
 			}
 
 			// And see if we're into the unmapped reads at the end
 			if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-				worker.submitData(pairs);
 				break;
 			}
 
@@ -323,6 +322,10 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			worker.submitData(pairs);
 
 			pairs = new ArrayList<>(MAX_PAIRS);
+		}
+		
+		if (pairs.size() > 0) {
+			worker.submitData(pairs);
 		}
 
 		service.shutdown();
