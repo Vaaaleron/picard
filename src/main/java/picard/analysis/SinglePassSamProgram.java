@@ -139,6 +139,8 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		Semaphore sem = new Semaphore(1);
 
 		final int QUEUE_CAPACITY = 10;
+		
+		Object monitor = new Object();
 
 		class Worker implements Runnable {
 
@@ -163,7 +165,10 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 							@Override
 							public void run() {
-								working.set(true);
+								synchronized (monitor) {
+									working.set(true);
+									monitor.notify();
+								}
 								for (Object[] objects : tmpPairs) {
 									final SAMRecord rec = (SAMRecord) objects[0];
 									final ReferenceSequence ref = (ReferenceSequence) objects[1];
@@ -174,7 +179,10 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 								}
 
-								working.set(false);
+								synchronized (monitor) {
+									working.set(false);
+									monitor.notify();
+								}
 								sem.release();
 							}
 						});
@@ -228,11 +236,26 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 		worker.submitData(pairs);
 
-		while (!worker.working.get()) {
+		synchronized (monitor) {
+			while (!worker.working.get()) {
+				try {
+					monitor.wait();
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
 		}
+		
 		long startWrk = System.nanoTime();
 
-		while (worker.working.get()) {
+		synchronized (monitor) {
+			while (worker.working.get()) {
+				try {
+					monitor.wait();
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
 		}
 		long stopWrk = System.nanoTime();
 
@@ -268,11 +291,25 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 			worker.submitData(pairs);
 
-			while (!worker.working.get()) {
+			synchronized (monitor) {
+				while (!worker.working.get()) {
+					try {
+						monitor.wait();
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
 			}
 			startWrk = System.nanoTime();
 
-			while (worker.working.get()) {
+			synchronized (monitor) {
+				while (worker.working.get()) {
+					try {
+						monitor.wait();
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
 			}
 			stopWrk = System.nanoTime();
 
