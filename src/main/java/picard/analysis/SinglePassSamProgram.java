@@ -42,6 +42,7 @@ import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
 
 import java.io.File;
+import java.lang.Thread.State;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -53,7 +54,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Super class that is designed to provide some consistent structure between
@@ -139,7 +139,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		Semaphore sem = new Semaphore(1);
 
 		final int QUEUE_CAPACITY = 10;
-		
+
 		Object monitor = new Object();
 
 		class Worker implements Runnable {
@@ -148,44 +148,28 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 			BlockingQueue<List<Object[]>> queue = new LinkedBlockingQueue<List<Object[]>>(QUEUE_CAPACITY);
 
-			AtomicBoolean working = new AtomicBoolean(false);
+			boolean testing = false;
+
+			List<Object[]> tmpPairs;
+
+			Runnable task;
+			
+			long startSub;
+			long startWrk;
+			long stopWrk;
 
 			@Override
 			public void run() {
 				while (true) {
 					try {
-						final List<Object[]> tmpPairs = queue.take();
-						
+						sem.acquire();
+						tmpPairs = queue.take();
+
 						if (tmpPairs.isEmpty()) {
 							return;
 						}
-						
-						sem.acquire();
-						service.submit(new Runnable() {
 
-							@Override
-							public void run() {
-								synchronized (monitor) {
-									working.set(true);
-									monitor.notify();
-								}
-								for (Object[] objects : tmpPairs) {
-									final SAMRecord rec = (SAMRecord) objects[0];
-									final ReferenceSequence ref = (ReferenceSequence) objects[1];
-
-									for (final SinglePassSamProgram program : programs) {
-										program.acceptRead(rec, ref);
-									}
-
-								}
-
-								synchronized (monitor) {
-									working.set(false);
-									monitor.notify();
-								}
-								sem.release();
-							}
-						});
+						service.submit(task);
 
 					} catch (InterruptedException e) {
 						e.printStackTrace();
@@ -208,6 +192,51 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 					e.printStackTrace();
 				}
 			}
+
+			Runnable test = new Runnable() {
+
+				@Override
+				public void run() {
+
+					synchronized (monitor) {
+						startWrk = System.nanoTime();
+
+						for (Object[] objects : tmpPairs) {
+							final SAMRecord rec = (SAMRecord) objects[0];
+							final ReferenceSequence ref = (ReferenceSequence) objects[1];
+
+							for (final SinglePassSamProgram program : programs) {
+								program.acceptRead(rec, ref);
+							}
+						}
+
+						stopWrk = System.nanoTime();
+						
+						testing = false;
+						monitor.notify();
+					}
+
+					sem.release();
+				}
+			};
+
+			Runnable work = new Runnable() {
+
+				@Override
+				public void run() {
+					for (Object[] objects : tmpPairs) {
+						final SAMRecord rec = (SAMRecord) objects[0];
+						final ReferenceSequence ref = (ReferenceSequence) objects[1];
+
+						for (final SinglePassSamProgram program : programs) {
+							program.acceptRead(rec, ref);
+						}
+
+					}
+
+					sem.release();
+				}
+			};
 		}
 
 		// Starting ExecutorService
@@ -219,6 +248,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		// finding optimal MAX_PAIRS value
 		// first test
 		SAMRecord rec = it.next();
+		worker.task = worker.test;
 
 		ReferenceSequence ref;
 		if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
@@ -232,12 +262,13 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 		pairs.add(new Object[] { rec, ref });
 
-		long startSub = System.nanoTime();
+		worker.startSub = System.nanoTime();
 
 		worker.submitData(pairs);
 
 		synchronized (monitor) {
-			while (!worker.working.get()) {
+			worker.testing = true;
+			while (worker.testing) {
 				try {
 					monitor.wait();
 				} catch (InterruptedException e) {
@@ -245,24 +276,11 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				}
 			}
 		}
-		
-		long startWrk = System.nanoTime();
-
-		synchronized (monitor) {
-			while (worker.working.get()) {
-				try {
-					monitor.wait();
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-			}
-		}
-		long stopWrk = System.nanoTime();
 
 		progress.record(rec);
 
-		long submitting1 = startWrk - startSub;
-		long working1 = stopWrk - startWrk;
+		long submitting1 = worker.startWrk - worker.startSub;
+		long working1 = worker.stopWrk - worker.startWrk;
 
 		// finding optimal MAX_PAIRS value
 		// second test
@@ -287,12 +305,13 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				}
 			}
 
-			startSub = System.nanoTime();
+			worker.startSub = System.nanoTime();
 
 			worker.submitData(pairs);
 
 			synchronized (monitor) {
-				while (!worker.working.get()) {
+				worker.testing = true;
+				while (worker.testing) {
 					try {
 						monitor.wait();
 					} catch (InterruptedException e) {
@@ -300,36 +319,31 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 					}
 				}
 			}
-			startWrk = System.nanoTime();
 
-			synchronized (monitor) {
-				while (worker.working.get()) {
-					try {
-						monitor.wait();
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-			stopWrk = System.nanoTime();
-
-
-			long submitting2 = startWrk - startSub;
-			long working2 = stopWrk - startWrk;
+			long submitting2 = worker.startWrk - worker.startSub;
+			long working2 = worker.stopWrk - worker.startWrk;
 
 			long wrkOneElement = working2 - working1;
 			long subOneElement = submitting2 - submitting1;
 			long subQueue = submitting1 - subOneElement;
 
+//			System.out.println("wrkOneElement: " + wrkOneElement);
+//			System.out.println("subOneElement: " + subOneElement);
+//			System.out.println("subQueue: " + subQueue);
+//			System.out.println("it's: " + (subQueue / (wrkOneElement - subOneElement)));
+//			
 			if (wrkOneElement > subOneElement) {
 				MAX_PAIRS = (int) (subQueue / (wrkOneElement - subOneElement));
 			} else {
-				MAX_PAIRS = 10000;
+				MAX_PAIRS = 1000;
 			}
 
 		}
+		
+//		System.out.println("MAX_PAIRS: " + MAX_PAIRS);
 
 		pairs = new ArrayList<>(MAX_PAIRS);
+		worker.task = worker.work;
 
 		while (it.hasNext()) {
 			// See if we need to terminate early?
@@ -360,7 +374,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
 			pairs = new ArrayList<>(MAX_PAIRS);
 		}
-		
+
 		if (pairs.size() > 0) {
 			worker.submitData(pairs);
 		}
