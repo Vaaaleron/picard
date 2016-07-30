@@ -133,7 +133,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         
         ExecutorService service = Executors.newSingleThreadExecutor();
         
-        final int MAX_PAIRS = 10000;
+        final int MAX_PAIRS = 1000;
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
         
         class Worker implements Runnable {
