@@ -203,7 +203,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         Worker worker = new Worker();
         service.execute(worker);
         
-        final int MAX_PAIRS = 10000;
+        final int MAX_PAIRS = 1000;
         
         
         List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
