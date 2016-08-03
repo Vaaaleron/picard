@@ -152,26 +152,24 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         	public void run() {
         		while (true) {
 					try {
+						sem.acquire();
 						final List<Object[]> tmpPairs = queue.take();
 						
 						if (tmpPairs.isEmpty()) {
 							return;
 						}
 						
-						sem.acquire();
 						service.submit(new Runnable() {
 							
 							@Override
 							public void run() {
-								for (Object[] objects : tmpPairs) {
-									final SAMRecord rec = (SAMRecord) objects[0];
-									final ReferenceSequence ref = (ReferenceSequence) objects[1];
-									
-									for (final SinglePassSamProgram program : programs) {
-										program.acceptRead(rec, ref);
-									}
-									
-								}
+								programs.parallelStream().forEach(program ->
+										tmpPairs.stream().forEach(objects -> {
+											final SAMRecord rec = (SAMRecord) objects[0];
+											final ReferenceSequence ref = (ReferenceSequence) objects[1];
+											
+											program.acceptRead(rec, ref);
+										}));
 								
 								sem.release();
 							}
