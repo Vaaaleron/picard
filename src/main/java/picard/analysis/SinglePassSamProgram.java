@@ -153,8 +153,6 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 			}
 		};
 		
-		Worker worker = new Worker();
-
         for (final SAMRecord rec : in) {
         	// See if we need to terminate early?
         	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
@@ -179,6 +177,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 				continue;
 			}
             
+            Worker worker = new Worker();
             worker.data = pairs;
             pairs = new ArrayList<>(MAX_PAIRS);
             
@@ -188,7 +187,8 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
         }
         
         if (pairs.size() > 0) {
-        	worker.data = pairs;
+            Worker worker = new Worker();
+            worker.data = pairs;
 			service.submit(worker);
 		}
         
