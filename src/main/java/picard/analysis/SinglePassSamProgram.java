@@ -83,123 +83,118 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 		return 0;
 	}
 
-	public static void makeItSo(final File input,
-                                final File referenceSequence,
-                                final boolean assumeSorted,
-                                final long stopAfter,
-                                final Collection<SinglePassSamProgram> programs) {
+	public static void makeItSo(final File input, final File referenceSequence, final boolean assumeSorted,
+			final long stopAfter, final Collection<SinglePassSamProgram> programs) {
 
-        // Setup the standard inputs
-        IOUtil.assertFileIsReadable(input);
-        final SamReader in = SamReaderFactory.makeDefault().referenceSequence(referenceSequence).open(input);
+		// Setup the standard inputs
+		IOUtil.assertFileIsReadable(input);
+		final SamReader in = SamReaderFactory.makeDefault().referenceSequence(referenceSequence).open(input);
 
-        // Optionally load up the reference sequence and double check sequence dictionaries
-        final ReferenceSequenceFileWalker walker;
-        if (referenceSequence == null) {
-            walker = null;
-        } else {
-            IOUtil.assertFileIsReadable(referenceSequence);
-            walker = new ReferenceSequenceFileWalker(referenceSequence);
+		// Optionally load up the reference sequence and double check sequence
+		// dictionaries
+		final ReferenceSequenceFileWalker walker;
+		if (referenceSequence == null) {
+			walker = null;
+		} else {
+			IOUtil.assertFileIsReadable(referenceSequence);
+			walker = new ReferenceSequenceFileWalker(referenceSequence);
 
-            if (!in.getFileHeader().getSequenceDictionary().isEmpty()) {
-                SequenceUtil.assertSequenceDictionariesEqual(in.getFileHeader().getSequenceDictionary(),
-                        walker.getSequenceDictionary());
-            }
-        }
+			if (!in.getFileHeader().getSequenceDictionary().isEmpty()) {
+				SequenceUtil.assertSequenceDictionariesEqual(in.getFileHeader().getSequenceDictionary(),
+						walker.getSequenceDictionary());
+			}
+		}
 
-        // Check on the sort order of the BAM file
-        {
-            final SortOrder sort = in.getFileHeader().getSortOrder();
-            if (sort != SortOrder.coordinate) {
-                if (assumeSorted) {
-                    log.warn("File reports sort order '" + sort + "', assuming it's coordinate sorted anyway.");
-                } else {
-                    throw new PicardException("File " + input.getAbsolutePath() + " should be coordinate sorted but " +
-                            "the header says the sort order is " + sort + ". If you believe the file " +
-                            "to be coordinate sorted you may pass ASSUME_SORTED=true");
-                }
-            }
-        }
+		// Check on the sort order of the BAM file
+		{
+			final SortOrder sort = in.getFileHeader().getSortOrder();
+			if (sort != SortOrder.coordinate) {
+				if (assumeSorted) {
+					log.warn("File reports sort order '" + sort + "', assuming it's coordinate sorted anyway.");
+				} else {
+					throw new PicardException("File " + input.getAbsolutePath() + " should be coordinate sorted but "
+							+ "the header says the sort order is " + sort + ". If you believe the file "
+							+ "to be coordinate sorted you may pass ASSUME_SORTED=true");
+				}
+			}
+		}
 
-        // Call the abstract setup method!
-        boolean anyUseNoRefReads = false;
-        for (final SinglePassSamProgram program : programs) {
-            program.setup(in.getFileHeader(), input);
-            anyUseNoRefReads = anyUseNoRefReads || program.usesNoRefReads();
-        }
+		// Call the abstract setup method!
+		boolean anyUseNoRefReads = false;
+		for (final SinglePassSamProgram program : programs) {
+			program.setup(in.getFileHeader(), input);
+			anyUseNoRefReads = anyUseNoRefReads || program.usesNoRefReads();
+		}
 
+		final ProgressLogger progress = new ProgressLogger(log);
 
-        final ProgressLogger progress = new ProgressLogger(log);
-        
-        ExecutorService service = Executors.newSingleThreadExecutor();
-        
-        final int MAX_PAIRS = 1000;
-        List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
-        
-        class Worker implements Runnable {
-			
-        	List<Object[]> data = new ArrayList<>(MAX_PAIRS);
-        	
+		ExecutorService service = Executors.newSingleThreadExecutor();
+
+		final int MAX_PAIRS = 1000;
+		List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
+
+		class Worker implements Runnable {
+
+			List<Object[]> data = new ArrayList<>(MAX_PAIRS);
+
 			@Override
 			public void run() {
-				for (Object[] objects : data) {
+				programs.parallelStream().forEach(program -> data.stream().forEach(objects -> {
 					SAMRecord rec = (SAMRecord) objects[0];
 					ReferenceSequence ref = (ReferenceSequence) objects[1];
 					
-					for (final SinglePassSamProgram program : programs) {
-						program.acceptRead(rec, ref);
-					}
-				}
+					program.acceptRead(rec, ref);
+				}));
 			}
-		};
-		
-		Worker worker = new Worker();
+			
+		}
 
-        for (final SAMRecord rec : in) {
-        	// See if we need to terminate early?
-        	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-        		break;
-        	}
-        	
-        	// And see if we're into the unmapped reads at the end
-        	if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-        		break;
-        	}
-        	
-            final ReferenceSequence ref;
-            if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                ref = null;
-            } else {
-                ref = walker.get(rec.getReferenceIndex());
-            }
-            
-            progress.record(rec);
-            pairs.add(new Object[]{rec, ref});
-            if (pairs.size() < MAX_PAIRS) {
+		for (final SAMRecord rec : in) {
+			// See if we need to terminate early?
+			if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+				break;
+			}
+
+			// And see if we're into the unmapped reads at the end
+			if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+				break;
+			}
+
+			final ReferenceSequence ref;
+			if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+				ref = null;
+			} else {
+				ref = walker.get(rec.getReferenceIndex());
+			}
+
+			progress.record(rec);
+			pairs.add(new Object[] { rec, ref });
+			if (pairs.size() < MAX_PAIRS) {
 				continue;
 			}
-            
-            worker.data = pairs;
-            pairs = new ArrayList<>(MAX_PAIRS);
-            
+
+			Worker worker = new Worker();
+			worker.data = pairs;
+			pairs = new ArrayList<>(MAX_PAIRS);
+
 			service.submit(worker);
 
-			
-        }
-        
-        if (pairs.size() > 0) {
-        	worker.data = pairs;
+		}
+
+		if (pairs.size() > 0) {
+			Worker worker = new Worker();
+			worker.data = pairs;
 			service.submit(worker);
 		}
-        
-        service.shutdown();
 
-        CloserUtil.close(in);
+		service.shutdown();
 
-        for (final SinglePassSamProgram program : programs) {
-            program.finish();
-        }
-    }
+		CloserUtil.close(in);
+
+		for (final SinglePassSamProgram program : programs) {
+			program.finish();
+		}
+	}
 
 	/**
 	 * Can be overriden and set to false if the section of unmapped reads at the
