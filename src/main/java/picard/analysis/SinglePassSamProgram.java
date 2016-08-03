@@ -42,8 +42,10 @@ import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
 /**
  * Super class that is designed to provide some consistent structure between subclasses that
@@ -123,33 +125,60 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
             anyUseNoRefReads = anyUseNoRefReads || program.usesNoRefReads();
         }
 
-
         final ProgressLogger progress = new ProgressLogger(log);
 
+        final int MAX_PAIRS = 1000;
+        List<Object[]> pairs = new ArrayList<>(MAX_PAIRS);
+        
         for (final SAMRecord rec : in) {
+        	// See if we need to terminate early?
+        	if (stopAfter > 0 && progress.getCount() >= stopAfter) {
+        		break;
+        	}
+        	
+        	// And see if we're into the unmapped reads at the end
+        	if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
+        		break;
+        	}
+        	
             final ReferenceSequence ref;
             if (walker == null || rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
                 ref = null;
             } else {
                 ref = walker.get(rec.getReferenceIndex());
             }
-
-            for (final SinglePassSamProgram program : programs) {
-                program.acceptRead(rec, ref);
-            }
-
+            
             progress.record(rec);
-
-            // See if we need to terminate early?
-            if (stopAfter > 0 && progress.getCount() >= stopAfter) {
-                break;
-            }
-
-            // And see if we're into the unmapped reads at the end
-            if (!anyUseNoRefReads && rec.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX) {
-                break;
-            }
+            pairs.add(new Object[] {rec, ref});
+            if (pairs.size() < MAX_PAIRS) {
+				continue;
+			}
+            
+            final List<Object[]> tmpPairs = pairs;
+            pairs = new ArrayList<>(MAX_PAIRS);
+            
+            programs.parallelStream().forEach(program -> 
+            		tmpPairs.stream().forEach(objects -> {
+            			final SAMRecord tmpRec = (SAMRecord) objects[0];
+						final ReferenceSequence tmpRef = (ReferenceSequence) objects[1];
+            			
+            			program.acceptRead(tmpRec, tmpRef);
+            		}));
+        
         }
+        
+        if (pairs.size() > 0) {
+        	final List<Object[]> tmpPairs = pairs;
+            pairs = new ArrayList<>(MAX_PAIRS);
+            
+            programs.parallelStream().forEach(program -> 
+            		tmpPairs.stream().forEach(objects -> {
+            			final SAMRecord tmpRec = (SAMRecord) objects[0];
+						final ReferenceSequence tmpRef = (ReferenceSequence) objects[1];
+            			
+            			program.acceptRead(tmpRec, tmpRef);
+            		}));
+		}
 
         CloserUtil.close(in);
 
