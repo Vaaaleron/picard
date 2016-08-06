@@ -129,7 +129,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
         final ProgressLogger progress = new ProgressLogger(log);
         
-        ExecutorService service = Executors.newCachedThreadPool();
+        ExecutorService service = Executors.newSingleThreadExecutor();
 
         for (final SAMRecord rec : in) {
             final ReferenceSequence ref;
