@@ -139,7 +139,7 @@ public abstract class SinglePassSamProgram extends CommandLineProgram {
 
         Semaphore sem = new Semaphore(1);
         
-        final int QUEUE_CAPACITY = 10;
+        final int QUEUE_CAPACITY = 5;
         
         
         class Worker implements Runnable {
